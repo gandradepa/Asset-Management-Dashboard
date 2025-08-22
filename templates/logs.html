@@ -41,6 +41,7 @@
             </tr>
           </thead>
           <tbody>
+            {# Server already sorted ONLY by when_ts desc; just render #}
             {% for r in rows %}
             <tr>
               <td><span class="text-nowrap">{{ r.when }}</span></td>

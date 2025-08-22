@@ -13,7 +13,7 @@ Features
 --------
 - App tiles linking to Capture + Review apps
 - "Run AI Interpreter" buttons (ME/BF) that launch whitelisted scripts
-- Flash message format: "API Interpreter BF: <timestamp>"
+- Flash message format: "API Interpreter BF/ME: <timestamp> — open summary"
 - Approval analytics chart (bar + pie) with Building filter
 - Friendly Logs UI:
     /logs          -> recent logs table (When, Title, File, Actions)
@@ -34,6 +34,7 @@ from flask import (
     Flask, render_template, redirect, url_for, flash,
     request, abort, Response, jsonify, send_from_directory
 )
+from markupsafe import Markup  # for clickable flash message
 
 # ------------------ Optional chart module ------------------
 # Expects a local module at charts/approval.py
@@ -226,18 +227,19 @@ def run_task(task_key: str):
         task = _validate_task_key(task_key)
         log_path = _launch_cmd_detached(task["cmd"], task.get("cwd"))
 
-        # Custom success text: "API Interpreter BF: 1755872945"
+        # Custom success text with clickable link: "API Interpreter BF: 1755872945 — open summary"
         label_for_flash = {
             "qr_api_bf": "API Interpreter BF",
             "qr_api_me": "API Interpreter ME",
         }.get(task_key, f"Task {task_key}")
 
         ts = _extract_ts_from_logname(log_path.name) or str(int(time.time()))
-        flash(f"{label_for_flash}: {ts}", "success")
+        link = url_for("read_log", name=log_path.name, mode="summary")
+        flash(Markup(f'{label_for_flash}: {ts} — <a href="{link}" class="alert-link">open summary</a>'), "success")
 
     except Exception as e:
         flash(f"Failed to start task '{task_key}': {e}", "danger")
-    # preserve current building filter when redirecting back
+    # preserve current building filter when redirecting back (falls back to All)
     return redirect(url_for("index", building=request.args.get("building", "All")))
 
 @app.get("/task_status/<task_key>")
@@ -327,17 +329,23 @@ def _safe_log_path(name: str) -> Path:
 
 @app.get("/logs")
 def list_logs():
-    """User-friendly list with When / Title / File / Actions."""
-    newest = sorted(LOG_DIR.glob("*.log"), reverse=True)[:200]
+    """User-friendly list sorted ONLY by the When timestamp (descending)."""
+    files = list(LOG_DIR.glob("*.log"))
     rows = []
-    for p in newest:
-        ts = _extract_ts_from_logname(p.name)
+    for p in files:
+        ts_raw = _extract_ts_from_logname(p.name)           # e.g., "1755874399"
+        ts_int = int(ts_raw) if ts_raw and ts_raw.isdigit() else 0  # numeric for sorting
         rows.append({
             "name": p.name,
-            "when": _when_from_ts(ts),
+            "when": _when_from_ts(ts_raw),                  # "YYYY-MM-DD HH:MM:SS" or "—"
+            "when_ts": ts_int,                              # used ONLY for sorting
             "title": _title_from_logname(p.name),
             "size_kb": f"{max(p.stat().st_size // 1024, 1)} KB",
         })
+
+    # Sort STRICTLY by when_ts desc; items without a timestamp (0) fall to the bottom
+    rows.sort(key=lambda r: r["when_ts"], reverse=True)
+
     return render_template("logs.html", rows=rows)
 
 @app.get("/logs/read")
